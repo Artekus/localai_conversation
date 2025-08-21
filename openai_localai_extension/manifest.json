@@ -1,12 +1,13 @@
 {
-  "domain": "openai_conversation",
-  "name": "OpenAI",
+  "domain": "openai_localai_extension",
+  "name": "OpenAI LocalAi Extension",
   "after_dependencies": ["assist_pipeline", "intent"],
-  "codeowners": ["@balloob"],
+  "codeowners": ["@Artekus"],
   "config_flow": true,
   "dependencies": ["conversation"],
-  "documentation": "https://www.home-assistant.io/integrations/openai_conversation",
+  "documentation": "https://github.com/Artekus/OpenAI_LocalAI_Extension",
   "integration_type": "service",
   "iot_class": "cloud_polling",
-  "requirements": ["openai==1.99.5"]
+  "requirements": ["openai~=1.99.5"],
+  "version": "0.0.1"
 }
