@@ -1,0 +1,173 @@
+"""LLM API for LocalAI."""
+from __future__ import annotations
+
+from typing import Any
+
+from homeassistant.components import conversation
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import llm, intent, entity_registry as er
+from homeassistant.util.json import JsonObjectType
+from homeassistant.util import yaml as yaml_util
+from homeassistant.components.homeassistant.exposed_entities import async_should_expose
+import logging
+
+_LOGGER = logging.getLogger(__name__)
+
+class CustomGetLiveContextTool(llm.Tool):
+    """Tool for getting the current state of exposed entities, including color."""
+
+    name = "GetLiveContext"
+    description = (
+        "Provides real-time information about the CURRENT state, value, or mode of devices, "
+        "sensors, entities, or areas. Use this tool for: "
+        "1. Answering questions about current conditions (e.g., 'Is the light on?', 'What color is the bedroom light?'). "
+        "2. As the first step in conditional actions (e.g., 'If the weather is rainy, turn off sprinklers' requires checking the weather first)."
+    )
+
+    async def async_call(
+        self,
+        hass: HomeAssistant,
+        tool_input: llm.ToolInput,
+        llm_context: llm.LLMContext,
+    ) -> JsonObjectType:
+        """Get the current state of exposed entities."""
+        if llm_context.assistant is None:
+            return {"success": False, "error": "No assistant configured"}
+
+        entity_registry = er.async_get(hass)
+        
+        interesting_attributes = {
+            "temperature", "current_temperature", "temperature_unit", "brightness",
+            "humidity", "unit_of_measurement", "device_class", "current_position",
+            "percentage", "volume_level", "media_title", "media_artist",
+            "media_album_name", "rgb_color", "hs_color"
+        }
+
+        entities_by_domain = {}
+
+        for state in sorted(hass.states.async_all(), key=lambda s: s.name):
+            if not async_should_expose(hass, llm_context.assistant, state.entity_id):
+                continue
+
+            entity_entry = entity_registry.async_get(state.entity_id)
+            names = [state.name]
+            if entity_entry:
+                names.extend(entity_entry.aliases)
+
+            info: dict[str, Any] = {
+                "names": ", ".join(names),
+                "state": state.state,
+            }
+            
+            attributes = {
+                k: str(v) for k, v in state.attributes.items() if k in interesting_attributes
+            }
+            if attributes:
+                info["attributes"] = attributes
+            
+            if state.domain not in entities_by_domain:
+                entities_by_domain[state.domain] = []
+            entities_by_domain[state.domain].append(info)
+
+        if not entities_by_domain:
+            return {"success": False, "error": llm.NO_ENTITIES_PROMPT}
+
+        return {
+            "success": True,
+            "result": "Live Context:\n" + yaml_util.dump(entities_by_domain),
+        }
+
+
+class CustomLocalAI_API(llm.AssistAPI):
+    """A custom LLM API for LocalAI with tailored tool descriptions."""
+
+    def __init__(self, hass: HomeAssistant) -> None:
+        """Initialize the custom API."""
+        super().__init__(hass=hass)
+        self.id = "localai_conversation"
+        self.name = "LocalAI Custom Tools"
+
+    def _async_get_tools(
+        self, llm_context: llm.LLMContext, exposed_entities: dict | None
+    ) -> list[llm.Tool]:
+        """Get the tools for the API."""
+        # Get the default set of tools from the parent class
+        tools = super()._async_get_tools(llm_context, exposed_entities)
+
+        # Find and replace the default GetLiveContext tool
+        for i, tool in enumerate(tools):
+            if tool.name == "GetLiveContext":
+                tools[i] = CustomGetLiveContextTool()
+                break
+        else:
+            # If not found (e.g., no entities exposed), add it
+            tools.append(CustomGetLiveContextTool())
+            
+        # Customize descriptions for other tools
+        for tool in tools:
+            if tool.name == "HassTurnOn":
+                tool.description = (
+                    "Turns on or opens a device. Use for commands like 'turn on the fan' or 'open the garage door'. "
+                    "For lights, only the 'name' and 'domain' parameters are needed. Do not use 'device_class' for lights."
+                )
+            elif tool.name == "HassTurnOff":
+                tool.description = (
+                    "Turns off or closes a device. Use for commands like 'turn off the light' or 'close the blinds'. "
+                    "For lights, only the 'name' and 'domain' parameters are needed. Do not use 'device_class' for lights."
+                )
+            elif tool.name == "HassToggle":
+                tool.description = (
+                    "Toggles a device on or off. "
+                    "Use for commands like 'toggle the living room switch'."
+                )
+            elif tool.name == "HassSetPosition":
+                tool.description = (
+                    "Sets the position of a cover entity, like blinds or a garage door. The 'position' should be a number between 0 and 100."
+                )
+            elif tool.name == "HassBroadcast":
+                tool.description = "Broadcasts a message to all speakers."
+            elif tool.name == "HassListAddItem":
+                tool.description = "Adds an item to a to-do list."
+            elif tool.name == "HassListCompleteItem":
+                tool.description = "Marks an item on a to-do list as complete."
+            elif tool.name == "HassClimateSetTemperature":
+                tool.description = "Sets the temperature of a climate device."
+            elif tool.name == "HassLightSet":
+                tool.description = (
+                    "Adjusts the properties of a light, like color or brightness. "
+                    "Only use one of 'color', 'brightness', or 'temperature' at a time. "
+                    "Brightness should be a number between 0 and 100."
+                )
+            elif tool.name == "HassMediaUnpause":
+                tool.description = "Resumes a media player."
+            elif tool.name == "HassMediaPause":
+                tool.description = "Pauses a media player."
+            elif tool.name == "HassMediaNext":
+                tool.description = "Skips to the next track on a media player."
+            elif tool.name == "HassMediaPrevious":
+                tool.description = "Goes to the previous track on a media player."
+            elif tool.name == "HassSetVolume":
+                tool.description = "Sets the volume of a media player. The 'volume_level' should be a number between 0 and 100."
+            elif tool.name == "HassMediaSearchAndPlay":
+                tool.description = "Searches for media and plays it on a media player."
+            elif tool.name == "HassTimerStatus":
+                tool.description = "Checks the status of a timer."
+            elif tool.name == "HassStartTimer":
+                tool.description = "Starts a timer."
+            elif tool.name == "HassCancelTimer":
+                tool.description = "Cancels a timer."
+            elif tool.name == "HassIncreaseTimer":
+                tool.description = "Increases the duration of a timer."
+            elif tool.name == "HassDecreaseTimer":
+                tool.description = "Decreases the duration of a timer."
+            elif tool.name == "HassPauseTimer":
+                tool.description = "Pauses a timer."
+            elif tool.name == "HassUnpauseTimer":
+                tool.description = "Resumes a paused timer."
+            elif tool.name == "HassGetCurrentDate":
+                tool.description = "Gets the current date."
+            elif tool.name == "HassGetCurrentTime":
+                tool.description = "Gets the current time."
+
+        return tools
+
