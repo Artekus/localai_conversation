@@ -16,8 +16,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers import llm, intent
-from voluptuous_openapi import convert
+from homeassistant.helpers import llm, intent, area_registry as ar, floor_registry as fr, device_registry as dr
 
 
 from .const import (
@@ -39,6 +38,16 @@ from .const import (
     CONF_MAX_FUNCTION_CALLS_PER_CONVERSATION,
     DEFAULT_MAX_FUNCTION_CALLS_PER_CONVERSATION,
     DEFAULT_DEBUG_LOGGING,
+    CONF_BASE_INSTRUCTIONS,
+    DEFAULT_BASE_INSTRUCTIONS,
+    CONF_AREA_AWARE_PROMPT,
+    DEFAULT_AREA_AWARE_PROMPT,
+    CONF_NO_AREA_PROMPT,
+    DEFAULT_NO_AREA_PROMPT,
+    CONF_TIMER_UNSUPPORTED_PROMPT,
+    DEFAULT_TIMER_UNSUPPORTED_PROMPT,
+    CONF_DYNAMIC_CONTEXT_PROMPT,
+    DEFAULT_DYNAMIC_CONTEXT_PROMPT,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -82,6 +91,49 @@ class LocalAIAgent(ConversationEntity):
         """Return a list of supported languages."""
         return "*"
 
+    def _get_preable(self, llm_context: llm.LLMContext) -> list[str]:
+        """Return the customized prompt preamble for the API."""
+        config_entry = self.entry
+
+        options = config_entry.options
+        base_instructions = options.get(CONF_BASE_INSTRUCTIONS, DEFAULT_BASE_INSTRUCTIONS)
+        area_aware_prompt = options.get(CONF_AREA_AWARE_PROMPT, DEFAULT_AREA_AWARE_PROMPT)
+        no_area_prompt = options.get(CONF_NO_AREA_PROMPT, DEFAULT_NO_AREA_PROMPT)
+        timer_unsupported_prompt = options.get(CONF_TIMER_UNSUPPORTED_PROMPT, DEFAULT_TIMER_UNSUPPORTED_PROMPT)
+        dynamic_context_prompt = options.get(CONF_DYNAMIC_CONTEXT_PROMPT, DEFAULT_DYNAMIC_CONTEXT_PROMPT)
+
+        prompt = [base_instructions]
+
+        area: ar.AreaEntry | None = None
+        floor: fr.FloorEntry | None = None
+        if llm_context.device_id:
+            device_reg = dr.async_get(self.hass)
+            device = device_reg.async_get(llm_context.device_id)
+
+            if device:
+                area_reg = ar.async_get(self.hass)
+                if device.area_id and (area := area_reg.async_get_area(device.area_id)):
+                    floor_reg = fr.async_get(self.hass)
+                    if area.floor_id:
+                        floor = floor_reg.async_get_floor(area.floor_id)
+
+        if floor and area:
+            floor_info = f" (floor {floor.name})"
+            prompt.append(area_aware_prompt.format(area_name=area.name, floor_info=floor_info))
+        elif area:
+            prompt.append(area_aware_prompt.format(area_name=area.name, floor_info=""))
+        else:
+            prompt.append(no_area_prompt)
+
+        if not llm_context.device_id or not intent.async_device_supports_timers(
+            self.hass, llm_context.device_id
+        ):
+            prompt.append(timer_unsupported_prompt)
+
+        prompt.append(dynamic_context_prompt)
+
+        return prompt
+
     async def _async_handle_message(
         self, user_input: ConversationInput, chat_log: ChatLog
     ) -> ConversationResult:
@@ -101,10 +153,15 @@ class LocalAIAgent(ConversationEntity):
         function_call_count = 0
 
         try:
+            full_system_prompt = "\n".join([
+                system_prompt,
+                *self._get_preable(llm_context)
+            ])
+
             await chat_log.async_provide_llm_data(
                 llm_context,
                 user_llm_hass_api="localai_conversation",
-                user_llm_prompt=system_prompt,
+                user_llm_prompt=full_system_prompt,
                 user_extra_system_prompt=tool_prompt,
             )
         except ConverseError as err:
@@ -128,7 +185,6 @@ class LocalAIAgent(ConversationEntity):
 
         try:
             while function_call_count < max_function_calls:
-                # Initial query to LocalAI
                 response = await self._query_localai(messages, tools, debug_logging)
                 response_message = response["choices"][0]["message"]
                 messages.append(response_message)
@@ -136,7 +192,6 @@ class LocalAIAgent(ConversationEntity):
                 tool_calls = response_message.get("tool_calls")
                 content_str = response_message.get("content")
 
-                # Models sometimes return tool calls as a JSON string in the content field
                 if not tool_calls and isinstance(content_str, str):
                     try:
                         json_start_index = content_str.find("[")
@@ -153,7 +208,6 @@ class LocalAIAgent(ConversationEntity):
                         )
                         tool_calls = None
 
-                # Check for tool calls and execute them
                 if not tool_calls:
                     break
 
@@ -173,26 +227,17 @@ class LocalAIAgent(ConversationEntity):
                             continue
                     else:
                         tool_args = raw_args
-                    
-                    # Clean up empty arguments
-                    tool_args = {k: v for k, v in tool_args.items() if v}
-
 
                     tool = next((t for t in tools if t.name == tool_name), None)
                     tool_response_content = ""
 
                     if tool:
                         try:
-                            # Defensively clean arguments to only include what the tool schema expects.
-                            # This prevents the AI from passing invalid extra parameters.
-                            cleaned_args = {}
-                            for key in tool.parameters.schema:
-                                key_str = str(key)
-                                if key_str in tool_args:
-                                    cleaned_args[key_str] = tool_args[key_str]
-                            
+                            cleaned_args = {k: v for k, v in tool_args.items() if v}
+                            if tool_name in ("HassTurnOn", "HassTurnOff") and cleaned_args.get("domain") == "light":
+                                cleaned_args.pop("device_class", None)
                             if tool_name == "HassLightSet":
-                                if "brightness" in cleaned_args and "color" not in cleaned_args:
+                                if "brightness" in cleaned_args:
                                     cleaned_args.pop("color", None)
                                     cleaned_args.pop("temperature", None)
                                 elif "color" in cleaned_args:
@@ -201,7 +246,7 @@ class LocalAIAgent(ConversationEntity):
                                 elif "temperature" in cleaned_args:
                                     cleaned_args.pop("brightness", None)
                                     cleaned_args.pop("color", None)
-
+                            
                             tool_response = await tool.async_call(
                                 self.hass,
                                 llm.ToolInput(tool_name, cleaned_args),
@@ -209,14 +254,12 @@ class LocalAIAgent(ConversationEntity):
                             )
                             tool_response_content = json.dumps(tool_response)
 
-                            # After a successful tool call, get a summary from the AI
                             messages.append({
                                 "role": "tool",
                                 "tool_call_id": tool_call.get("id", ""),
                                 "name": tool_name,
                                 "content": tool_response_content,
                             })
-                            # Make one final call to the AI for a summary, but do not provide any tools
                             summary_response = await self._query_localai(messages, [], debug_logging)
                             final_response_content = summary_response["choices"][0]["message"].get("content")
                             intent_response = intent.IntentResponse(language=user_input.language)
@@ -241,8 +284,6 @@ class LocalAIAgent(ConversationEntity):
                             "content": tool_response_content,
                         }
                     )
-                # This line is removed to allow the loop to continue with the full tool list on the next iteration
-                # tools = []
 
             final_response_content = messages[-1].get("content", "Sorry, I'm not sure how to respond to that.")
             intent_response = intent.IntentResponse(language=user_input.language)

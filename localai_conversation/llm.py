@@ -2,14 +2,14 @@
 from __future__ import annotations
 
 from typing import Any
+import logging
 
-from homeassistant.components import conversation
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import llm, intent, entity_registry as er
+from homeassistant.helpers import llm
 from homeassistant.util.json import JsonObjectType
 from homeassistant.util import yaml as yaml_util
 from homeassistant.components.homeassistant.exposed_entities import async_should_expose
-import logging
+from homeassistant.helpers import entity_registry as er
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -22,6 +22,7 @@ class CustomGetLiveContextTool(llm.Tool):
         "sensors, entities, or areas. Use this tool for: "
         "1. Answering questions about current conditions (e.g., 'Is the light on?', 'What color is the bedroom light?'). "
         "2. As the first step in conditional actions (e.g., 'If the weather is rainy, turn off sprinklers' requires checking the weather first)."
+        "3. Answering questions about what a media player or location is listening to or playing (e.g. 'What is playing in the lounge?')."
     )
 
     async def async_call(
@@ -56,7 +57,7 @@ class CustomGetLiveContextTool(llm.Tool):
 
             info: dict[str, Any] = {
                 "names": ", ".join(names),
-                "state": state.state,
+                "state": str(state.state),
             }
             
             attributes = {
@@ -91,19 +92,15 @@ class CustomLocalAI_API(llm.AssistAPI):
         self, llm_context: llm.LLMContext, exposed_entities: dict | None
     ) -> list[llm.Tool]:
         """Get the tools for the API."""
-        # Get the default set of tools from the parent class
         tools = super()._async_get_tools(llm_context, exposed_entities)
 
-        # Find and replace the default GetLiveContext tool
         for i, tool in enumerate(tools):
             if tool.name == "GetLiveContext":
                 tools[i] = CustomGetLiveContextTool()
                 break
         else:
-            # If not found (e.g., no entities exposed), add it
             tools.append(CustomGetLiveContextTool())
             
-        # Customize descriptions for other tools
         for tool in tools:
             if tool.name == "HassTurnOn":
                 tool.description = (

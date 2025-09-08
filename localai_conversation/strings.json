@@ -1,36 +1,33 @@
 {
+  "title": "LocalAI Conversation",
   "config": {
     "step": {
       "user": {
-        "title": "LocalAI Conversation",
-        "description": "Enter a name and URL for your LocalAI instance.",
+        "title": "LocalAI Setup",
+        "description": "Enter the URL of your LocalAI instance.",
         "data": {
-          "name": "Name",
           "url": "URL"
         }
       }
-    },
-    "error": {
-      "cannot_connect": "Failed to connect to the LocalAI instance. Please check the URL and try again.",
-      "unknown": "An unknown error occurred."
-    },
-    "abort": {
-      "already_configured": "This LocalAI instance is already configured."
     }
   },
   "options": {
     "step": {
       "init": {
         "title": "LocalAI Conversation Settings",
-        "description": "Adjust the advanced settings for the LocalAI agent.",
         "data": {
           "model": "Model",
           "system_prompt": "System Prompt",
           "tool_prompt": "Tool Prompt",
+          "base_instructions": "Base Instructions",
+          "area_aware_prompt": "Area Aware Prompt",
+          "no_area_prompt": "No Area Prompt",
+          "timer_unsupported_prompt": "Timer Unsupported Prompt",
+          "dynamic_context_prompt": "Dynamic Context Prompt",
           "temperature": "Temperature",
           "top_p": "Top P",
           "max_tokens": "Max Tokens",
-          "max_function_calls_per_conversation": "Max Function Calls Per Conversation",
+          "max_function_calls_per_conversation": "Max Function Calls",
           "debug_logging": "Enable Debug Logging"
         }
       }

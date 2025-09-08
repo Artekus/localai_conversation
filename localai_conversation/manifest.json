@@ -3,11 +3,11 @@
   "name": "LocalAI Conversation",
   "documentation": "https://github.com/your_github_username/localai-home-assistant",
   "issue_tracker": "https://github.com/your_github_username/localai-home-assistant/issues",
-  "codeowners": ["@your_github_username"],
+  "codeowners": [ "@your_github_username" ],
   "config_flow": true,
   "iot_class": "local",
   "version": "1.0.0",
   "requirements": [],
-  "dependencies": ["conversation"],
-  "after_dependencies": ["http"]
+  "dependencies": [ "conversation" ],
+  "after_dependencies": [ "http" ]
 }

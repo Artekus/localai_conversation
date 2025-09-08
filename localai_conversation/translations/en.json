@@ -2,36 +2,32 @@
   "config": {
     "step": {
       "user": {
-        "title": "LocalAI Conversation",
-        "description": "Enter a name and URL for your LocalAI instance.",
+        "title": "LocalAI Setup",
+        "description": "Enter the URL of your LocalAI instance.",
         "data": {
-          "name": "Name",
           "url": "URL"
         }
       }
-    },
-    "error": {
-      "cannot_connect": "Failed to connect to the LocalAI instance. Please check the URL and try again.",
-      "unknown": "An unknown error occurred."
-    },
-    "abort": {
-      "already_configured": "This LocalAI instance is already configured."
     }
   },
   "options": {
     "step": {
       "init": {
         "title": "LocalAI Conversation Settings",
-        "description": "Adjust the advanced settings for the LocalAI agent.",
         "data": {
-          "model": "Model",
-          "system_prompt": "System Prompt",
-          "tool_prompt": "Tool Prompt",
-          "temperature": "Temperature",
-          "top_p": "Top P",
-          "max_tokens": "Max Tokens",
-          "max_function_calls_per_conversation": "Max Function Calls Per Conversation",
-          "debug_logging": "Enable Debug Logging"
+          "model": "Model to use for the conversation agent.",
+          "system_prompt": "The system prompt to send to the AI. This is the base personality.",
+          "tool_prompt": "Extra instructions for the AI on how to use the tools.",
+          "base_instructions": "Base instructions for controlling Home Assistant.",
+          "area_aware_prompt": "Prompt when the device's area is known. Use placeholders for the area and floor.",
+          "no_area_prompt": "Prompt when the device's area is not known.",
+          "timer_unsupported_prompt": "Prompt when the device does not support timers.",
+          "dynamic_context_prompt": "Prompt explaining how to use the GetLiveContext tool for real-time data.",
+          "temperature": "Temperature for the AI model.",
+          "top_p": "Top P for the AI model.",
+          "max_tokens": "Max tokens to generate in the response.",
+          "max_function_calls_per_conversation": "Maximum number of function calls per conversation turn.",
+          "debug_logging": "Enable to log the full request and response to the AI."
         }
       }
     }
