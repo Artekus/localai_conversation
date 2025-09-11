@@ -6,6 +6,7 @@ import logging
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import llm
+import voluptuous as vol
 from homeassistant.util.json import JsonObjectType
 from homeassistant.util import yaml as yaml_util
 from homeassistant.components.homeassistant.exposed_entities import async_should_expose
@@ -25,6 +26,7 @@ class CustomGetLiveContextTool(llm.Tool):
         "3. Answering questions about what a media player or location is listening to or playing (e.g. 'What is playing in the lounge?')."
     )
 
+    parameters = vol.Schema({})
     async def async_call(
         self,
         hass: HomeAssistant,
@@ -104,13 +106,17 @@ class CustomLocalAI_API(llm.AssistAPI):
         for tool in tools:
             if tool.name == "HassTurnOn":
                 tool.description = (
-                    "Turns on or opens a device. Use for commands like 'turn on the fan' or 'open the garage door'. "
-                    "For lights, only the 'name' and 'domain' parameters are needed. Do not use 'device_class' for lights."
+                    "Turns on or opens a device, like a light, switch, or cover. "
+                    "You MUST provide a target for this action. Use the 'name' parameter to specify the device by its name (e.g., 'living room lamp'). "
+                    "You can also target an entire 'area' (e.g., 'living room'). "
+                    "Example: To turn on a light named 'kitchen overhead', call with {'name': 'kitchen overhead', 'domain': 'light'}."
                 )
             elif tool.name == "HassTurnOff":
                 tool.description = (
-                    "Turns off or closes a device. Use for commands like 'turn off the light' or 'close the blinds'. "
-                    "For lights, only the 'name' and 'domain' parameters are needed. Do not use 'device_class' for lights."
+                    "Turns off or closes a device, like a light, switch, or cover. "
+                    "You MUST provide a target for this action. Use the 'name' parameter to specify the device by its name (e.g., 'living room lamp'). "
+                    "You can also target an entire 'area' (e.g., 'living room'). "
+                    "Example: To turn off a light named 'kitchen overhead', call with {'name': 'kitchen overhead', 'domain': 'light'}."
                 )
             elif tool.name == "HassToggle":
                 tool.description = (
@@ -167,4 +173,3 @@ class CustomLocalAI_API(llm.AssistAPI):
                 tool.description = "Gets the current time."
 
         return tools
-

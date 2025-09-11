@@ -16,6 +16,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from voluptuous_serialize import convert
 from homeassistant.helpers import llm, intent, area_registry as ar, floor_registry as fr, device_registry as dr
 
 
@@ -271,7 +272,11 @@ class LocalAIAgent(ConversationEntity):
 
                         except Exception as e:
                             _LOGGER.error("Error calling tool %s: %s", tool_name, e)
-                            tool_response_content = f"Error: {e}. The description for tool '{tool_name}' is: {tool.description}"
+                            error_message = str(e)
+                            if "cannot target all devices" in error_message:
+                                tool_response_content = f"Error: The tool '{tool_name}' requires a specific target. You must provide a name, area, or entity ID. Do not try to control all devices at once."
+                            else:
+                                tool_response_content = f"Error: {e}. The description for tool '{tool_name}' is: {tool.description}"
                     else:
                         _LOGGER.warning("Tool %s not found", tool_name)
                         tool_response_content = f"Error: Tool '{tool_name}' not found."
@@ -343,19 +348,25 @@ class LocalAIAgent(ConversationEntity):
 
     def _tool_to_openai_tool(self, tool: llm.Tool) -> dict[str, Any]:
         """Convert a tool to the OpenAI tool format."""
-        try:
-            parameters = convert(
-                tool.parameters, custom_serializer=llm.selector_serializer
-            )
-            if "type" not in parameters:
-                parameters["type"] = "object"
-            if "properties" not in parameters:
-                parameters["properties"] = {}
-        except Exception as e:
-            _LOGGER.warning(
-                "Could not convert parameters for tool %s: %s", tool.name, e
-            )
-            parameters = {"type": "object", "properties": {}}
+        parameters: dict[str, Any]
+        if tool.parameters is None:
+            parameters = {}
+        else:
+            try:
+                parameters = convert(
+                    tool.parameters, custom_serializer=llm.selector_serializer
+                )
+            except Exception as e:
+                _LOGGER.debug("Could not convert parameters for tool %s: %s", tool.name, e)
+                parameters = {}
+
+        if not isinstance(parameters, dict):
+            _LOGGER.debug("Parameters for tool %s is not a dict: %s", tool.name, parameters)
+            parameters = {}
+
+        if "properties" not in parameters:
+            parameters["properties"] = {}
+        parameters.setdefault("type", "object")
 
         return {
             "type": "function",
@@ -365,4 +376,3 @@ class LocalAIAgent(ConversationEntity):
                 "parameters": parameters,
             },
         }
-

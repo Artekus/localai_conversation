@@ -45,9 +45,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 if unregister_cb := domain_data.pop("unregister_api", None):
                     unregister_cb()
                 domain_data["api_registered"] = False
-                # Clean up entirely if no entries are left
-                if not domain_data["entries"]:
-                     hass.data.pop(DOMAIN)
+                hass.data.pop(DOMAIN)
 
     return unload_ok
 
@@ -55,4 +53,3 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Handle options update."""
     await hass.config_entries.async_reload(entry.entry_id)
-
