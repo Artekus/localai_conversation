@@ -156,7 +156,7 @@ class LocalAIAgent(ConversationEntity):
         try:
             full_system_prompt = "\n".join([
                 system_prompt,
-                *self._get_preable(llm_context)
+                *self._get_preable(llm_context),
             ])
 
             await chat_log.async_provide_llm_data(
@@ -233,12 +233,14 @@ class LocalAIAgent(ConversationEntity):
                     tool_response_content = ""
 
                     if tool:
+                        # On success, we summarize and exit.
+                        # On error, we append the error and continue the loop to let the AI try again.
                         try:
                             cleaned_args = {k: v for k, v in tool_args.items() if v}
                             if tool_name in ("HassTurnOn", "HassTurnOff") and cleaned_args.get("domain") == "light":
                                 cleaned_args.pop("device_class", None)
                             if tool_name == "HassLightSet":
-                                if "brightness" in cleaned_args:
+                                if "brightness" in cleaned_args and "color" not in cleaned_args:
                                     cleaned_args.pop("color", None)
                                     cleaned_args.pop("temperature", None)
                                 elif "color" in cleaned_args:
@@ -248,28 +250,15 @@ class LocalAIAgent(ConversationEntity):
                                     cleaned_args.pop("brightness", None)
                                     cleaned_args.pop("color", None)
                             
-                            tool_response = await tool.async_call(
+                            # This is the success path
+                            tool_response = await tool.async_call( # type: ignore
                                 self.hass,
                                 llm.ToolInput(tool_name, cleaned_args),
                                 llm_context,
                             )
                             tool_response_content = json.dumps(tool_response)
 
-                            messages.append({
-                                "role": "tool",
-                                "tool_call_id": tool_call.get("id", ""),
-                                "name": tool_name,
-                                "content": tool_response_content,
-                            })
-                            summary_response = await self._query_localai(messages, [], debug_logging)
-                            final_response_content = summary_response["choices"][0]["message"].get("content")
-                            intent_response = intent.IntentResponse(language=user_input.language)
-                            intent_response.async_set_speech(final_response_content)
-                            return ConversationResult(
-                                response=intent_response,
-                                conversation_id=user_input.conversation_id,
-                            )
-
+                        # This is the error path
                         except Exception as e:
                             _LOGGER.error("Error calling tool %s: %s", tool_name, e)
                             error_message = str(e)
@@ -277,20 +266,36 @@ class LocalAIAgent(ConversationEntity):
                                 tool_response_content = f"Error: The tool '{tool_name}' requires a specific target. You must provide a name, area, or entity ID. Do not try to control all devices at once."
                             else:
                                 tool_response_content = f"Error: {e}. The description for tool '{tool_name}' is: {tool.description}"
+                            
+                            # Append error and let the while loop re-query the AI
+                            messages.append({"role": "tool", "tool_call_id": tool_call.get("id", ""), "name": tool_name, "content": tool_response_content})
+                            continue
+
                     else:
                         _LOGGER.warning("Tool %s not found", tool_name)
                         tool_response_content = f"Error: Tool '{tool_name}' not found."
+                        messages.append({"role": "tool", "tool_call_id": tool_call.get("id", ""), "name": tool_name, "content": tool_response_content})
+                        continue
 
-                    messages.append(
-                        {
-                            "role": "tool",
-                            "tool_call_id": tool_call.get("id", ""),
-                            "name": tool_name,
-                            "content": tool_response_content,
-                        }
+                    # If we reach here, the tool call was successful.
+                    # Append the successful result, get a summary, and exit.
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call.get("id", ""),
+                        "name": tool_name,
+                        "content": tool_response_content,
+                    })
+                    summary_response = await self._query_localai(messages, [], debug_logging)
+                    final_response_content = summary_response["choices"][0]["message"].get("content")
+                    intent_response = intent.IntentResponse(language=user_input.language)
+                    intent_response.async_set_speech(final_response_content)
+                    return ConversationResult(
+                        response=intent_response,
+                        conversation_id=user_input.conversation_id,
                     )
-
-            final_response_content = messages[-1].get("content", "Sorry, I'm not sure how to respond to that.")
+                
+            # This is reached if the AI's response did not contain a tool call.
+            final_response_content = messages[-1].get("content") or "Sorry, I'm not sure how to respond to that."
             intent_response = intent.IntentResponse(language=user_input.language)
             intent_response.async_set_speech(final_response_content)
             return ConversationResult(

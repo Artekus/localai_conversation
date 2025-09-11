@@ -25,8 +25,11 @@ DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant."
 DEFAULT_TOOL_PROMPT = """
 When calling a tool, only use the arguments specified in the function signature.
 Do not add extra arguments that are not in the function signature.
-The description of the tool should be used in the decision making process as to which tool to use.
-You must use a tool to control a device when the user's request includes action words such as "turn on", "turn off", "set", "change", "update", "open", "close", "lock", or "unlock".
+The decription of the tool must be used in the decision making process when deciding which tool to call.
+Do not call any tools that have the word 'timer' in them for anything except for user requests containing the word timer. 
+When controlling Home Assistant always call the intent tools. 
+Only use a tool that controls a device when words such as "turn on", "turn off", "set", "change", "update", "open", "close", "lock", "unlock" and similar type words are apart of the user's request. The following tools are for control: HassTurnOn, HassTurnOff, HassNevermind, HassRespond, HassBroadcast, HassSetPosition, HassLightSet, HassClimateSetTemperature, HassShoppingListAddItem, HassListAddItem, HassListCompleteItem, HassVacuumStart, HassVacuumReturnToBase, HassMediaPause, HassMediaUnpause, HassMediaNext, HassMediaPrevious, HassSetVolume, HassSetVolumeRelative, HassMediaSearchAndPlay, HassStartTimer, HassCancelAllTimers, HassCancelTimer, HassIncreaseTimer, HassDecreaseTimer, HassPauseTimer, HassUnpauseTimer.
+When controlling a device, you must use the exact name of the device as provided in the context and prefer passing just name and domain. When controlling an area, prefer passing just area name and domain.
 """
 DEFAULT_TEMPERATURE = 0.5
 DEFAULT_TOP_P = 1.00
@@ -36,9 +39,7 @@ DEFAULT_DEBUG_LOGGING = False
 
 # New default prompt values
 DEFAULT_BASE_INSTRUCTIONS = (
-    "When controlling Home Assistant always call the intent tools. Use HassTurnOn to lock and HassTurnOff to unlock a lock. "
-    "When controlling a device, you must use the exact name of the device as provided in the context. "
-    "Prefer passing just the 'name' and 'domain' of the device. When controlling an area, prefer passing just area name and domain."
+    "Use HassTurnOn to lock and HassTurnOff to unlock a lock. "
 )
 DEFAULT_AREA_AWARE_PROMPT = "You are in area {area_name}{floor_info} and all generic commands like 'turn on the lights' should target this area."
 DEFAULT_NO_AREA_PROMPT = "When a user asks to turn on all devices of a specific type, ask user to specify an area, unless there is only one device of that type."
