@@ -21,7 +21,7 @@ CONF_DYNAMIC_CONTEXT_PROMPT = "dynamic_context_prompt"
 
 
 DEFAULT_MODEL = "gpt-4"
-DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant."
+DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant. Use HassTurnOn to lock and HassTurnOff to unlock a lock."
 DEFAULT_TOOL_PROMPT = """
 When calling a tool, only use the arguments specified in the function signature.
 Do not add extra arguments that are not in the function signature.
@@ -38,9 +38,7 @@ DEFAULT_MAX_FUNCTION_CALLS_PER_CONVERSATION = 10
 DEFAULT_DEBUG_LOGGING = False
 
 # New default prompt values
-DEFAULT_BASE_INSTRUCTIONS = (
-    "Use HassTurnOn to lock and HassTurnOff to unlock a lock. "
-)
+DEFAULT_BASE_INSTRUCTIONS = ""
 DEFAULT_AREA_AWARE_PROMPT = "You are in area {area_name}{floor_info} and all generic commands like 'turn on the lights' should target this area."
 DEFAULT_NO_AREA_PROMPT = "When a user asks to turn on all devices of a specific type, ask user to specify an area, unless there is only one device of that type."
 DEFAULT_TIMER_UNSUPPORTED_PROMPT = "This device is not able to start timers."

@@ -157,13 +157,13 @@ class LocalAIAgent(ConversationEntity):
             full_system_prompt = "\n".join([
                 system_prompt,
                 *self._get_preable(llm_context),
+                tool_prompt,
             ])
 
             await chat_log.async_provide_llm_data(
                 llm_context,
                 user_llm_hass_api="localai_conversation",
                 user_llm_prompt=full_system_prompt,
-                user_extra_system_prompt=tool_prompt,
             )
         except ConverseError as err:
             return err.as_conversation_result()

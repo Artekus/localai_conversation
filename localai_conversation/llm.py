@@ -90,6 +90,26 @@ class CustomLocalAI_API(llm.AssistAPI):
         self.id = "localai_conversation"
         self.name = "LocalAI Custom Tools"
 
+    async def async_get_api_prompt(self, llm_context: llm.LLMContext) -> str:
+        """
+        Get the final prompt for the API, overriding the default Home Assistant behavior.
+
+        This method takes full control of prompt generation to prevent duplication
+        and ensure the static device context is placed correctly.
+        """
+        # 1. Start with the user-defined prompts passed from the conversation agent.
+        system_prompt_parts = [llm_context.user_prompt]
+
+        # 2. Manually generate the static device context.
+        exposed_entities = llm.async_get_exposed_entities(self.hass, llm_context)
+        if exposed_entities:
+            static_context_str = yaml_util.dump(exposed_entities)
+            # The header is intentionally included to match the user's prompt expectation.
+            system_prompt_parts.append(f"Static Context: An overview of the areas and the devices in this smart home:\n{static_context_str}")
+
+        # 3. Join all parts to create the final, complete prompt.
+        return "\n".join(system_prompt_parts)
+
     def _async_get_tools(
         self, llm_context: llm.LLMContext, exposed_entities: dict | None
     ) -> list[llm.Tool]:
