@@ -1,13 +1,13 @@
 {
   "domain": "localai_conversation",
   "name": "LocalAI Conversation",
-  "documentation": "https://github.com/your_github_username/localai-home-assistant",
-  "issue_tracker": "https://github.com/your_github_username/localai-home-assistant/issues",
-  "codeowners": [ "@your_github_username" ],
-  "config_flow": true,
-  "iot_class": "local",
+  "documentation": "https://github.com/Rener/localai_conversation",
+  "issue_tracker": "https://github.com/Rener/localai_conversation/issues",
+  "codeowners": ["@Rener"],
+  "dependencies": [
+    "conversation"
+  ],
   "version": "1.0.0",
   "requirements": [],
-  "dependencies": [ "conversation" ],
-  "after_dependencies": [ "http" ]
+  "iot_class": "local_polling"
 }

@@ -10,45 +10,30 @@ from homeassistant.components.conversation import (
     ConversationEntity,
     ConversationEntityFeature,
     ChatLog,
-    ConverseError,
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from voluptuous_serialize import convert
-from homeassistant.helpers import llm, intent, area_registry as ar, floor_registry as fr, device_registry as dr
+from homeassistant.helpers import llm, intent
 
 
 from .const import (
     DOMAIN,
     CONF_URL,
     CONF_MODEL,
-    CONF_SYSTEM_PROMPT,
-    CONF_TOOL_PROMPT,
     CONF_TEMPERATURE,
     CONF_TOP_P,
     CONF_MAX_TOKENS,
     CONF_DEBUG_LOGGING,
     DEFAULT_MODEL,
-    DEFAULT_SYSTEM_PROMPT,
-    DEFAULT_TOOL_PROMPT,
     DEFAULT_TEMPERATURE,
     DEFAULT_TOP_P,
     DEFAULT_MAX_TOKENS,
     CONF_MAX_FUNCTION_CALLS_PER_CONVERSATION,
     DEFAULT_MAX_FUNCTION_CALLS_PER_CONVERSATION,
     DEFAULT_DEBUG_LOGGING,
-    CONF_BASE_INSTRUCTIONS,
-    DEFAULT_BASE_INSTRUCTIONS,
-    CONF_AREA_AWARE_PROMPT,
-    DEFAULT_AREA_AWARE_PROMPT,
-    CONF_NO_AREA_PROMPT,
-    DEFAULT_NO_AREA_PROMPT,
-    CONF_TIMER_UNSUPPORTED_PROMPT,
-    DEFAULT_TIMER_UNSUPPORTED_PROMPT,
-    CONF_DYNAMIC_CONTEXT_PROMPT,
-    DEFAULT_DYNAMIC_CONTEXT_PROMPT,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -92,58 +77,11 @@ class LocalAIAgent(ConversationEntity):
         """Return a list of supported languages."""
         return "*"
 
-    def _get_preable(self, llm_context: llm.LLMContext) -> list[str]:
-        """Return the customized prompt preamble for the API."""
-        config_entry = self.entry
-
-        options = config_entry.options
-        base_instructions = options.get(CONF_BASE_INSTRUCTIONS, DEFAULT_BASE_INSTRUCTIONS)
-        area_aware_prompt = options.get(CONF_AREA_AWARE_PROMPT, DEFAULT_AREA_AWARE_PROMPT)
-        no_area_prompt = options.get(CONF_NO_AREA_PROMPT, DEFAULT_NO_AREA_PROMPT)
-        timer_unsupported_prompt = options.get(CONF_TIMER_UNSUPPORTED_PROMPT, DEFAULT_TIMER_UNSUPPORTED_PROMPT)
-        dynamic_context_prompt = options.get(CONF_DYNAMIC_CONTEXT_PROMPT, DEFAULT_DYNAMIC_CONTEXT_PROMPT)
-
-        prompt = [base_instructions]
-
-        area: ar.AreaEntry | None = None
-        floor: fr.FloorEntry | None = None
-        if llm_context.device_id:
-            device_reg = dr.async_get(self.hass)
-            device = device_reg.async_get(llm_context.device_id)
-
-            if device:
-                area_reg = ar.async_get(self.hass)
-                if device.area_id and (area := area_reg.async_get_area(device.area_id)):
-                    floor_reg = fr.async_get(self.hass)
-                    if area.floor_id:
-                        floor = floor_reg.async_get_floor(area.floor_id)
-
-        if floor and area:
-            floor_info = f" (floor {floor.name})"
-            prompt.append(area_aware_prompt.format(area_name=area.name, floor_info=floor_info))
-        elif area:
-            prompt.append(area_aware_prompt.format(area_name=area.name, floor_info=""))
-        else:
-            prompt.append(no_area_prompt)
-
-        if not llm_context.device_id or not intent.async_device_supports_timers(
-            self.hass, llm_context.device_id
-        ):
-            prompt.append(timer_unsupported_prompt)
-
-        prompt.append(dynamic_context_prompt)
-
-        return prompt
-
     async def _async_handle_message(
         self, user_input: ConversationInput, chat_log: ChatLog
     ) -> ConversationResult:
         """Handle a conversation turn."""
         llm_context = user_input.as_llm_context(DOMAIN)
-        system_prompt = self.entry.options.get(
-            CONF_SYSTEM_PROMPT, DEFAULT_SYSTEM_PROMPT
-        )
-        tool_prompt = self.entry.options.get(CONF_TOOL_PROMPT, DEFAULT_TOOL_PROMPT)
         debug_logging = self.entry.options.get(
             CONF_DEBUG_LOGGING, DEFAULT_DEBUG_LOGGING
         )
@@ -153,23 +91,23 @@ class LocalAIAgent(ConversationEntity):
         )
         function_call_count = 0
 
-        try:
-            full_system_prompt = "\n".join([
-                system_prompt,
-                *self._get_preable(llm_context),
-                tool_prompt,
-            ])
+        # The llm.py now handles all prompt creation. We just need to
+        # pass the context to the framework.
+        await chat_log.async_provide_llm_data(
+            llm_context, user_llm_hass_api=self.entry.entry_id
+        )
 
-            await chat_log.async_provide_llm_data(
-                llm_context,
-                user_llm_hass_api="localai_conversation",
-                user_llm_prompt=full_system_prompt,
-            )
-        except ConverseError as err:
-            return err.as_conversation_result()
+        # Explicitly get the fully-formed prompt from our custom API.
+        # This ensures the settings from the UI are always used.
+        system_prompt = await chat_log.llm_api.api.async_get_api_prompt(llm_context)
+        messages = [{"role": "system", "content": system_prompt}]
 
-        messages = []
+        # Now, we append the conversation history, skipping any old system prompts
+        # that might have been logged from other sources.
         for entry in chat_log.content:
+            if entry.role == "system":
+                continue
+
             role = entry.role
             if role == "tool_result":
                 role = "tool"
@@ -251,7 +189,7 @@ class LocalAIAgent(ConversationEntity):
                                     cleaned_args.pop("color", None)
                             
                             # This is the success path
-                            tool_response = await tool.async_call( # type: ignore
+                            tool_response = await tool.async_call(
                                 self.hass,
                                 llm.ToolInput(tool_name, cleaned_args),
                                 llm_context,

@@ -15,6 +15,7 @@
     "step": {
       "init": {
         "title": "LocalAI Conversation Settings",
+        "description": "Configure the settings for the LocalAI conversation agent. See below for details on each prompt field.",
         "data": {
           "model": "Model",
           "system_prompt": "System Prompt",

@@ -29,6 +29,7 @@ The decription of the tool must be used in the decision making process when deci
 Do not call any tools that have the word 'timer' in them for anything except for user requests containing the word timer. 
 When controlling Home Assistant always call the intent tools. 
 Only use a tool that controls a device when words such as "turn on", "turn off", "set", "change", "update", "open", "close", "lock", "unlock" and similar type words are apart of the user's request. The following tools are for control: HassTurnOn, HassTurnOff, HassNevermind, HassRespond, HassBroadcast, HassSetPosition, HassLightSet, HassClimateSetTemperature, HassShoppingListAddItem, HassListAddItem, HassListCompleteItem, HassVacuumStart, HassVacuumReturnToBase, HassMediaPause, HassMediaUnpause, HassMediaNext, HassMediaPrevious, HassSetVolume, HassSetVolumeRelative, HassMediaSearchAndPlay, HassStartTimer, HassCancelAllTimers, HassCancelTimer, HassIncreaseTimer, HassDecreaseTimer, HassPauseTimer, HassUnpauseTimer.
+After a tool has been executed, formulate a natural language response summarizing the result of the action. Do not just repeat the tool's output.
 When controlling a device, you must use the exact name of the device as provided in the context and prefer passing just name and domain. When controlling an area, prefer passing just area name and domain.
 """
 DEFAULT_TEMPERATURE = 0.5
