@@ -10,6 +10,7 @@ from homeassistant.components.conversation import (
     ConversationEntity,
     ConversationEntityFeature,
     ChatLog,
+    ConverseError,
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -91,23 +92,32 @@ class LocalAIAgent(ConversationEntity):
         )
         function_call_count = 0
 
-        # The llm.py now handles all prompt creation. We just need to
-        # pass the context to the framework.
-        await chat_log.async_provide_llm_data(
-            llm_context, user_llm_hass_api=self.entry.entry_id
-        )
+        
+        try:
+            # Get the custom API instance directly from hass.data where it was stored during setup.
+            # This is the authoritative way to access our specific API instance.
+            api = self.hass.data[DOMAIN][self.entry.entry_id]["api"]
 
-        # Explicitly get the fully-formed prompt from our custom API.
-        # This ensures the settings from the UI are always used.
-        system_prompt = await chat_log.llm_api.api.async_get_api_prompt(llm_context)
-        messages = [{"role": "system", "content": system_prompt}]
+            # Generate the system prompt using our custom API method.
+            system_prompt = await api.async_get_api_prompt(llm_context)
+            #Log showing system prompt
+            _LOGGER.info("Prompt Generated from Custom LLM: %s", system_prompt)
+            # Provide the generated prompt and our API to the Home Assistant framework.
+            # This populates chat_log with the correct context for this conversation turn.
+            await chat_log.async_provide_llm_data(
+                llm_context,
+                user_llm_hass_api=self.entry.entry_id,
+                user_llm_prompt=system_prompt,
+            )
+        except (ConverseError, KeyError) as err:
+            _LOGGER.error("Error preparing LLM data: %s", err)
+            converse_error = err if isinstance(err, ConverseError) else ConverseError(f"API instance not found: {err}")
+            return converse_error.as_conversation_result()
 
-        # Now, we append the conversation history, skipping any old system prompts
-        # that might have been logged from other sources.
+
+        # Build the message history from the chat log.
+        messages = []
         for entry in chat_log.content:
-            if entry.role == "system":
-                continue
-
             role = entry.role
             if role == "tool_result":
                 role = "tool"
@@ -118,11 +128,15 @@ class LocalAIAgent(ConversationEntity):
 
             messages.append({"role": role, "content": content})
 
+        # Line 96 was previously here
+
+
         tools = []
         if chat_log.llm_api:
             tools = chat_log.llm_api.tools
 
         try:
+            # Initial query to LocalAI            
             while function_call_count < max_function_calls:
                 response = await self._query_localai(messages, tools, debug_logging)
                 response_message = response["choices"][0]["message"]
@@ -130,7 +144,7 @@ class LocalAIAgent(ConversationEntity):
 
                 tool_calls = response_message.get("tool_calls")
                 content_str = response_message.get("content")
-
+            # Models sometimes return tool calls as a JSON string in the content field
                 if not tool_calls and isinstance(content_str, str):
                     try:
                         json_start_index = content_str.find("[")
@@ -146,7 +160,7 @@ class LocalAIAgent(ConversationEntity):
                             "Content is not a valid tool call JSON: %s", content_str
                         )
                         tool_calls = None
-
+                # Check for tool calls and execute them
                 if not tool_calls:
                     break
 
@@ -175,8 +189,8 @@ class LocalAIAgent(ConversationEntity):
                         # On error, we append the error and continue the loop to let the AI try again.
                         try:
                             cleaned_args = {k: v for k, v in tool_args.items() if v}
-                            if tool_name in ("HassTurnOn", "HassTurnOff") and cleaned_args.get("domain") == "light":
-                                cleaned_args.pop("device_class", None)
+                            #if tool_name in ("HassTurnOn", "HassTurnOff") and cleaned_args.get("domain") == "light":
+                            #    cleaned_args.pop("device_class", None)
                             if tool_name == "HassLightSet":
                                 if "brightness" in cleaned_args and "color" not in cleaned_args:
                                     cleaned_args.pop("color", None)
@@ -293,6 +307,12 @@ class LocalAIAgent(ConversationEntity):
         """Convert a tool to the OpenAI tool format."""
         parameters: dict[str, Any]
         if tool.parameters is None:
+            parameters = {}
+        # Some built-in tools use a generic object for empty parameters
+        # Some built-in tools use a generic object for empty parameters instead of a Schema.
+        # We check for this case to prevent noisy debug logs and handle it gracefully.
+        elif isinstance(tool.parameters, object) and not hasattr(tool.parameters, 'schema'):
+            _LOGGER.debug("Tool %s has generic object parameters, treating as empty.", tool.name)
             parameters = {}
         else:
             try:
