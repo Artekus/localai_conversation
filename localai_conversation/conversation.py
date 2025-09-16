@@ -61,7 +61,7 @@ class LocalAIAgent(ConversationEntity):
     @property
     def supported_features(self) -> ConversationEntityFeature:
         """Return the supported features of the agent."""
-        return ConversationEntityFeature.CONTROL
+        return ConversationEntityFeature.CONTROL | ConversationEntityFeature.STREAM
 
     @property
     def name(self) -> str:
@@ -101,13 +101,15 @@ class LocalAIAgent(ConversationEntity):
             # Generate the system prompt using our custom API method.
             system_prompt = await api.async_get_api_prompt(llm_context)
             #Log showing system prompt
-            _LOGGER.info("Prompt Generated from Custom LLM: %s", system_prompt)
-            # Provide the generated prompt and our API to the Home Assistant framework.
-            # This populates chat_log with the correct context for this conversation turn.
+            if debug_logging:
+                _LOGGER.info("Prompt Generated from Custom LLM: %s", system_prompt)
+            # Provide our API to the Home Assistant framework. By not passing
+            # user_llm_prompt, we prevent it from building a duplicate prompt.
+            # We only call this to get the tools from our API instance.
+            # Gemini deleted user_llm_prompt=system_prompt, from the function below.
             await chat_log.async_provide_llm_data(
                 llm_context,
                 user_llm_hass_api=self.entry.entry_id,
-                user_llm_prompt=system_prompt,
             )
         except (ConverseError, KeyError) as err:
             _LOGGER.error("Error preparing LLM data: %s", err)
@@ -115,9 +117,14 @@ class LocalAIAgent(ConversationEntity):
             return converse_error.as_conversation_result()
 
 
-        # Build the message history from the chat log.
+        # Build the message history from the chat log, filtering out any system prompts
+        # that may have been added by the framework. This ensures we have a clean slate.
         messages = []
         for entry in chat_log.content:
+            # Gemini added these next two lines too
+            # Skip any system messages that might have been added by other means.
+            if entry.role == "system":
+                continue
             role = entry.role
             if role == "tool_result":
                 role = "tool"
@@ -128,7 +135,9 @@ class LocalAIAgent(ConversationEntity):
 
             messages.append({"role": role, "content": content})
 
-        # Line 96 was previously here
+        # Gemini added this and I think it won't
+        # Manually insert our authoritative system prompt at the beginning of the conversation.
+        messages.insert(0, {"role": "system", "content": system_prompt})
 
 
         tools = []
@@ -217,11 +226,17 @@ class LocalAIAgent(ConversationEntity):
                             if "cannot target all devices" in error_message:
                                 tool_response_content = f"Error: The tool '{tool_name}' requires a specific target. You must provide a name, area, or entity ID. Do not try to control all devices at once."
                             else:
-                                tool_response_content = f"Error: {e}. The description for tool '{tool_name}' is: {tool.description}"
+                                #tool_response_content = f"Error: {e}. The description for tool '{tool_name}' is: {tool.description}"
+                                tool_response_content = (
+                                    f"The tool call to '{tool_name}' with arguments '{tool_args}' failed. "
+                                    f"The error was: '{e}'. Please review the tool's description and correct the arguments. "
+                                    f"The description is: '{tool.description}'."
+                                    f"Make sure you are calling the correct tool and providing the correct arguments."
+                                )
                             
                             # Append error and let the while loop re-query the AI
                             messages.append({"role": "tool", "tool_call_id": tool_call.get("id", ""), "name": tool_name, "content": tool_response_content})
-                            continue
+                            #break
 
                     else:
                         _LOGGER.warning("Tool %s not found", tool_name)
