@@ -104,6 +104,124 @@ class CustomGetLiveContextTool(llm.Tool):
 class CustomLocalAI_API(llm.AssistAPI):
     """A custom LLM API for LocalAI with tailored tool descriptions."""
 
+    # Centralized dictionary for overriding built-in tool properties.
+    # This is the single source of truth for tool descriptions and parameters.
+    TOOL_OVERRIDES = {
+        # --- General Control ---
+        "HassTurnOn": {
+            "description": (
+                "Turns on or opens a device, like a light, switch, or cover. "
+                "You MUST provide a target for this action. Use the 'name' parameter to specify the device by its name (e.g., 'living room lamp'). "
+                "You can also target an entire 'area' (e.g., 'living room'). "
+                "Example: To turn on a light named 'kitchen overhead', call with {'name': 'kitchen overhead', 'domain': 'light'}."
+            ),
+            "parameters": vol.Schema({vol.Optional("name"): str, vol.Optional("area"): str, vol.Optional("domain"): str, vol.Optional("entity_id"): str})
+        },
+        "HassTurnOff": {
+            "description": (
+                "Turns off or closes a device, like a light, switch, or cover. "
+                "You MUST provide a target for this action. Use the 'name' parameter to specify the device by its name (e.g., 'living room lamp'). "
+                "You can also target an entire 'area' (e.g., 'living room'). "
+                "Example: To turn off a light named 'kitchen overhead', call with {'name': 'kitchen overhead', 'domain': 'light'}."
+            ),
+            "parameters": vol.Schema({vol.Optional("name"): str, vol.Optional("area"): str, vol.Optional("domain"): str, vol.Optional("entity_id"): str})
+        },
+        "HassToggle": {
+            "description": "Toggles a device on or off. Use for commands like 'toggle the living room switch'.",
+            "parameters": vol.Schema({vol.Optional("name"): str, vol.Optional("area"): str, vol.Optional("domain"): str, vol.Optional("entity_id"): str})
+        },
+        "HassBroadcast": {
+            "description": "Broadcasts a message to all speakers.",
+            "parameters": vol.Schema({vol.Required("message"): str})
+        },
+
+        # --- Device Specific Control ---
+        "HassSetPosition": {
+            "description": "Sets the position of a cover entity, like blinds or a garage door. The 'position' should be a number between 0 and 100.",
+            "parameters": vol.Schema({vol.Optional("name"): str, vol.Optional("area"): str, vol.Optional("entity_id"): str, vol.Required("position"): vol.All(vol.Coerce(int), vol.Range(min=0, max=100))})
+        },
+        "HassClimateSetTemperature": {
+            "description": "Sets the temperature of a climate device.",
+            "parameters": vol.Schema({vol.Optional("name"): str, vol.Optional("area"): str, vol.Optional("entity_id"): str, vol.Required("temperature"): vol.Coerce(float), vol.Optional("hvac_mode"): str})
+        },
+        "HassLightSet": {
+            "description": (
+                "Adjusts the properties of a light, like color or brightness. "
+                "Only use one of 'color', 'brightness', or 'temperature' at a time. "
+                "Brightness should be a number between 0 and 100."
+            ),
+            "parameters": vol.Schema({vol.Optional("name"): str, vol.Optional("area"): str, vol.Optional("entity_id"): str, vol.Optional("brightness"): vol.All(vol.Coerce(int), vol.Range(min=0, max=100)), vol.Optional("color"): str, vol.Optional("temperature"): vol.Coerce(int)})
+        },
+        "HassFanSetSpeed": {
+            "description": "Sets a fan's speed by percentage.",
+            "parameters": vol.Schema({
+                vol.Optional("name"): str,
+                vol.Optional("area"): str,
+                vol.Optional("entity_id"): str,
+                vol.Required("percentage"): vol.All(vol.Coerce(int), vol.Range(min=0, max=100)),
+            })
+        },
+
+        # --- Media Player Control ---
+        "HassMediaUnpause": {
+            "description": "Resumes a media player.",
+            "parameters": vol.Schema({vol.Optional("name"): str, vol.Optional("area"): str, vol.Optional("entity_id"): str})
+        },
+        "HassMediaPause": {
+            "description": "Pauses a media player.",
+            "parameters": vol.Schema({vol.Optional("name"): str, vol.Optional("area"): str, vol.Optional("entity_id"): str})
+        },
+        "HassMediaNext": {
+            "description": "Skips to the next track on a media player.",
+            "parameters": vol.Schema({vol.Optional("name"): str, vol.Optional("area"): str, vol.Optional("entity_id"): str})
+        },
+        "HassMediaPrevious": {
+            "description": "Goes to the previous track on a media player.",
+            "parameters": vol.Schema({vol.Optional("name"): str, vol.Optional("area"): str, vol.Optional("entity_id"): str})
+        },
+        "HassSetVolume": {
+            "description": "Sets the volume of a media player. The 'volume_level' should be a number between 0 and 100.",
+            "parameters": vol.Schema({vol.Optional("name"): str, vol.Optional("area"): str, vol.Optional("entity_id"): str, vol.Required("volume_level"): vol.All(vol.Coerce(int), vol.Range(min=0, max=100))})
+        },
+        "HassMediaSearchAndPlay": {
+            "description": "Searches for media and plays it on a media player.",
+            "parameters": vol.Schema({vol.Optional("name"): str, vol.Optional("area"): str, vol.Optional("entity_id"): str, vol.Required("query"): str})
+        },
+
+        # --- List/To-do Control ---
+        "HassListAddItem": {
+            "description": "Adds an item to a to-do list.",
+            "parameters": vol.Schema({vol.Required("name"): str, vol.Required("list_name"): str})
+        },
+        "HassListCompleteItem": {
+            "description": "Marks an item on a to-do list as complete.",
+            "parameters": vol.Schema({vol.Required("name"): str, vol.Required("list_name"): str})
+        },
+
+        # --- Timer Control ---
+        "HassTimerStatus": {"description": "Checks the status of a timer."},
+        "HassStartTimer": {"description": "Starts a timer."},
+        "HassCancelTimer": {"description": "Cancels a timer."},
+        "HassIncreaseTimer": {"description": "Increases the duration of a timer."},
+        "HassDecreaseTimer": {"description": "Decreases the duration of a timer."},
+        "HassPauseTimer": {"description": "Pauses a timer."},
+        "HassUnpauseTimer": {"description": "Resumes a paused timer."},
+
+        # --- Date & Time ---
+        "HassGetCurrentDate": {"description": "Gets the current date."},
+        "HassGetCurrentTime": {"description": "Gets the current time."},
+
+        # --- Final Answer ---
+        "answer": {
+            "description": (
+                "Use this to respond to the user for greetings, conversational follow-ups, "
+                "or when no other tool is appropriate for the user's request. "
+                "Do NOT use this if the user is asking to control a device or get its state."
+            ),
+            "parameters": vol.Schema({vol.Required("message"): str})
+        },
+    }
+
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         """Initialize the custom API."""
         super().__init__(hass=hass)
@@ -182,12 +300,13 @@ class CustomLocalAI_API(llm.AssistAPI):
                 continue
 
             entity_entry = entity_registry.async_get(state.entity_id)
-            names = [state.name]
+            # Use a set to automatically handle de-duplication of names and aliases
+            names = {state.name}
             if entity_entry and entity_entry.aliases:
-                names.extend(entity_entry.aliases)
+                names.update(entity_entry.aliases)
 
             exposed_entities.setdefault(state.domain, []).append(
-                {"names": ", ".join(names), "entity_id": state.entity_id}
+                {"names": ", ".join(sorted(list(names))), "entity_id": state.entity_id}
             )
         if exposed_entities:
             prompt_parts.append(f"Static Context: An overview of the areas and the devices in this smart home:\n{yaml_util.dump(exposed_entities)}")
@@ -208,73 +327,14 @@ class CustomLocalAI_API(llm.AssistAPI):
         else:
             tools.append(CustomGetLiveContextTool())
             
+
+        # Apply overrides for descriptions and parameters
         for tool in tools:
-            if tool.name == "HassTurnOn":
-                tool.description = (
-                    "Turns on or opens a device, like a light, switch, or cover. "
-                    "You MUST provide a target for this action. Use the 'name' parameter to specify the device by its name (e.g., 'living room lamp'). "
-                    "You can also target an entire 'area' (e.g., 'living room'). "
-                    "Example: To turn on a light named 'kitchen overhead', call with {'name': 'kitchen overhead', 'domain': 'light'}."
-                )
-            elif tool.name == "HassTurnOff":
-                tool.description = (
-                    "Turns off or closes a device, like a light, switch, or cover. "
-                    "You MUST provide a target for this action. Use the 'name' parameter to specify the device by its name (e.g., 'living room lamp'). "
-                    "You can also target an entire 'area' (e.g., 'living room'). "
-                    "Example: To turn off a light named 'kitchen overhead', call with {'name': 'kitchen overhead', 'domain': 'light'}."
-                )
-            elif tool.name == "HassToggle":
-                tool.description = (
-                    "Toggles a device on or off. "
-                    "Use for commands like 'toggle the living room switch'."
-                )
-            elif tool.name == "HassSetPosition":
-                tool.description = (
-                    "Sets the position of a cover entity, like blinds or a garage door. The 'position' should be a number between 0 and 100."
-                )
-            elif tool.name == "HassBroadcast":
-                tool.description = "Broadcasts a message to all speakers."
-            elif tool.name == "HassListAddItem":
-                tool.description = "Adds an item to a to-do list."
-            elif tool.name == "HassListCompleteItem":
-                tool.description = "Marks an item on a to-do list as complete."
-            elif tool.name == "HassClimateSetTemperature":
-                tool.description = "Sets the temperature of a climate device."
-            elif tool.name == "HassLightSet":
-                tool.description = (
-                    "Adjusts the properties of a light, like color or brightness. "
-                    "Only use one of 'color', 'brightness', or 'temperature' at a time. "
-                    "Brightness should be a number between 0 and 100."
-                )
-            elif tool.name == "HassMediaUnpause":
-                tool.description = "Resumes a media player."
-            elif tool.name == "HassMediaPause":
-                tool.description = "Pauses a media player."
-            elif tool.name == "HassMediaNext":
-                tool.description = "Skips to the next track on a media player."
-            elif tool.name == "HassMediaPrevious":
-                tool.description = "Goes to the previous track on a media player."
-            elif tool.name == "HassSetVolume":
-                tool.description = "Sets the volume of a media player. The 'volume_level' should be a number between 0 and 100."
-            elif tool.name == "HassMediaSearchAndPlay":
-                tool.description = "Searches for media and plays it on a media player."
-            elif tool.name == "HassTimerStatus":
-                tool.description = "Checks the status of a timer."
-            elif tool.name == "HassStartTimer":
-                tool.description = "Starts a timer."
-            elif tool.name == "HassCancelTimer":
-                tool.description = "Cancels a timer."
-            elif tool.name == "HassIncreaseTimer":
-                tool.description = "Increases the duration of a timer."
-            elif tool.name == "HassDecreaseTimer":
-                tool.description = "Decreases the duration of a timer."
-            elif tool.name == "HassPauseTimer":
-                tool.description = "Pauses a timer."
-            elif tool.name == "HassUnpauseTimer":
-                tool.description = "Resumes a paused timer."
-            elif tool.name == "HassGetCurrentDate":
-                tool.description = "Gets the current date."
-            elif tool.name == "HassGetCurrentTime":
-                tool.description = "Gets the current time."
+            if tool.name in self.TOOL_OVERRIDES:
+                override = self.TOOL_OVERRIDES[tool.name]
+                if "description" in override:
+                    tool.description = override["description"]
+                if "parameters" in override:
+                    tool.parameters = override["parameters"]
 
         return tools

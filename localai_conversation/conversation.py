@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-import logging
+import logging, asyncio
 from typing import Any, Literal
 
 from homeassistant.components.conversation import (
@@ -14,6 +14,7 @@ from homeassistant.components.conversation import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+import voluptuous as vol
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from voluptuous_serialize import convert
@@ -61,7 +62,8 @@ class LocalAIAgent(ConversationEntity):
     @property
     def supported_features(self) -> ConversationEntityFeature:
         """Return the supported features of the agent."""
-        return ConversationEntityFeature.CONTROL | ConversationEntityFeature.STREAM
+        # Do not remove this comment. return ConversationEntityFeature.CONTROL | ConversationEntityFeature.STREAM
+        return ConversationEntityFeature.CONTROL
 
     @property
     def name(self) -> str:
@@ -90,7 +92,7 @@ class LocalAIAgent(ConversationEntity):
             CONF_MAX_FUNCTION_CALLS_PER_CONVERSATION,
             DEFAULT_MAX_FUNCTION_CALLS_PER_CONVERSATION,
         )
-        function_call_count = 0
+        #function_call_count = 0
 
         
         try:
@@ -120,20 +122,35 @@ class LocalAIAgent(ConversationEntity):
         # Build the message history from the chat log, filtering out any system prompts
         # that may have been added by the framework. This ensures we have a clean slate.
         messages = []
-        for entry in chat_log.content:
-            # Gemini added these next two lines too
-            # Skip any system messages that might have been added by other means.
-            if entry.role == "system":
+        for m in chat_log.content:
+            if m.role == "system":
                 continue
-            role = entry.role
-            if role == "tool_result":
-                role = "tool"
 
-            content = entry.content
-            if not isinstance(content, str):
-                content = json.dumps(content)
+            message: dict[str, Any] = {"role": m.role}
+            
+            if m.role == "user":
+                message["content"] = m.content
+            elif m.role == "assistant":
+                # Assistant messages can have both content and tool_calls
+                if m.content:
+                    message["content"] = m.content
+                if m.tool_calls:
+                    message["tool_calls"] = [
+                        {
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {"name": tc.tool_name, "arguments": json.dumps(tc.tool_args)},
+                        }
+                        for tc in m.tool_calls
+                    ]
+            elif m.role == "tool_result":
+                message["role"] = "tool"
+                message["tool_call_id"] = m.tool_call_id
+                message["content"] = json.dumps(m.tool_result)
 
-            messages.append({"role": role, "content": content})
+            # Only add the message if it has content or tool_calls
+            if "content" in message or "tool_calls" in message:
+                messages.append(message)
 
         # Gemini added this and I think it won't
         # Manually insert our authoritative system prompt at the beginning of the conversation.
@@ -145,124 +162,27 @@ class LocalAIAgent(ConversationEntity):
             tools = chat_log.llm_api.tools
 
         try:
-            # Initial query to LocalAI            
-            while function_call_count < max_function_calls:
-                response = await self._query_localai(messages, tools, debug_logging)
-                response_message = response["choices"][0]["message"]
-                messages.append(response_message)
+            # 1. _query_localai_streaming returns an async generator (the stream)
+            stream = self._query_localai_streaming(messages, tools, debug_logging)
 
-                tool_calls = response_message.get("tool_calls")
-                content_str = response_message.get("content")
-            # Models sometimes return tool calls as a JSON string in the content field
-                if not tool_calls and isinstance(content_str, str):
-                    try:
-                        json_start_index = content_str.find("[")
-                        if json_start_index != -1:
-                            json_str = content_str[json_start_index:]
-                            parsed_json = json.loads(json_str)
-                            if isinstance(parsed_json, list) and all(
-                                "function" in item for item in parsed_json
-                            ):
-                                tool_calls = parsed_json
-                    except (json.JSONDecodeError, TypeError):
-                        _LOGGER.debug(
-                            "Content is not a valid tool call JSON: %s", content_str
-                        )
-                        tool_calls = None
-                # Check for tool calls and execute them
-                if not tool_calls:
-                    break
+            # 2. Hand the stream over to Home Assistant's orchestrator.
+            # This function will handle tool calls and update the chat log automatically.
+            async for _ in chat_log.async_add_delta_content_stream(
+                agent_id=self.unique_id,
+                stream=stream,
+            ):
+                # This loop consumes the stream and any resulting tool calls.
+                # The 'pass' is intentional; the framework handles the logic.
+                pass
 
-                for tool_call in tool_calls:
-                    function_call_count += 1
-                    if "function" not in tool_call:
-                        continue
+            # 3. The chat log is now complete. The framework has handled the full
+            # conversation, including the final summary from the model.
+            final_message = chat_log.content[-1] if chat_log.content else None
+            if final_message and final_message.role == "assistant":
+                final_response_content = final_message.content
+            else:
+                final_response_content = "Sorry, I was unable to process that."
 
-                    tool_name = tool_call["function"]["name"]
-                    raw_args = tool_call["function"]["arguments"]
-
-                    if isinstance(raw_args, str):
-                        try:
-                            tool_args = json.loads(raw_args)
-                        except json.JSONDecodeError:
-                            _LOGGER.error("Failed to parse tool arguments: %s", raw_args)
-                            continue
-                    else:
-                        tool_args = raw_args
-
-                    tool = next((t for t in tools if t.name == tool_name), None)
-                    tool_response_content = ""
-
-                    if tool:
-                        # On success, we summarize and exit.
-                        # On error, we append the error and continue the loop to let the AI try again.
-                        try:
-                            cleaned_args = {k: v for k, v in tool_args.items() if v}
-                            #if tool_name in ("HassTurnOn", "HassTurnOff") and cleaned_args.get("domain") == "light":
-                            #    cleaned_args.pop("device_class", None)
-                            if tool_name == "HassLightSet":
-                                if "brightness" in cleaned_args and "color" not in cleaned_args:
-                                    cleaned_args.pop("color", None)
-                                    cleaned_args.pop("temperature", None)
-                                elif "color" in cleaned_args:
-                                    cleaned_args.pop("brightness", None)
-                                    cleaned_args.pop("temperature", None)
-                                elif "temperature" in cleaned_args:
-                                    cleaned_args.pop("brightness", None)
-                                    cleaned_args.pop("color", None)
-                            
-                            # This is the success path
-                            tool_response = await tool.async_call(
-                                self.hass,
-                                llm.ToolInput(tool_name, cleaned_args),
-                                llm_context,
-                            )
-                            tool_response_content = json.dumps(tool_response)
-
-                        # This is the error path
-                        except Exception as e:
-                            _LOGGER.error("Error calling tool %s: %s", tool_name, e)
-                            error_message = str(e)
-                            if "cannot target all devices" in error_message:
-                                tool_response_content = f"Error: The tool '{tool_name}' requires a specific target. You must provide a name, area, or entity ID. Do not try to control all devices at once."
-                            else:
-                                #tool_response_content = f"Error: {e}. The description for tool '{tool_name}' is: {tool.description}"
-                                tool_response_content = (
-                                    f"The tool call to '{tool_name}' with arguments '{tool_args}' failed. "
-                                    f"The error was: '{e}'. Please review the tool's description and correct the arguments. "
-                                    f"The description is: '{tool.description}'."
-                                    f"Make sure you are calling the correct tool and providing the correct arguments."
-                                )
-                            
-                            # Append error and let the while loop re-query the AI
-                            messages.append({"role": "tool", "tool_call_id": tool_call.get("id", ""), "name": tool_name, "content": tool_response_content})
-                            #break
-
-                    else:
-                        _LOGGER.warning("Tool %s not found", tool_name)
-                        tool_response_content = f"Error: Tool '{tool_name}' not found."
-                        messages.append({"role": "tool", "tool_call_id": tool_call.get("id", ""), "name": tool_name, "content": tool_response_content})
-                        continue
-
-                    # If we reach here, the tool call was successful.
-                    # Append the successful result, get a summary, and exit.
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tool_call.get("id", ""),
-                        "name": tool_name,
-                        "content": tool_response_content,
-                    })
-                    summary_response = await self._query_localai(messages, [], debug_logging)
-                    final_response_content = summary_response["choices"][0]["message"].get("content")
-                    intent_response = intent.IntentResponse(language=user_input.language)
-                    intent_response.async_set_speech(final_response_content)
-                    return ConversationResult(
-                        response=intent_response,
-                        conversation_id=user_input.conversation_id,
-                    )
-                
-            # This is reached if the AI's response did not contain a tool call.
-            final_response_content = messages[-1].get("content") or "Sorry, I'm not sure how to respond to that."
             intent_response = intent.IntentResponse(language=user_input.language)
             intent_response.async_set_speech(final_response_content)
             return ConversationResult(
@@ -318,33 +238,143 @@ class LocalAIAgent(ConversationEntity):
                 _LOGGER.info("LocalAI Response: %s", json.dumps(response_json, indent=2))
             return response_json
 
+    async def _query_localai_streaming(
+        self, messages: list[dict], tools: list[llm.Tool], debug_logging: bool
+    ) -> AsyncGenerator[dict[str, Any], None]:
+        """Query the LocalAI API with streaming and reassemble tool calls."""
+        session = async_get_clientsession(self.hass)
+        url = self.entry.data.get(CONF_URL)
+        model = self.entry.options.get(CONF_MODEL, DEFAULT_MODEL)
+        temperature = self.entry.options.get(CONF_TEMPERATURE, DEFAULT_TEMPERATURE)
+        top_p = self.entry.options.get(CONF_TOP_P, DEFAULT_TOP_P)
+        max_tokens = self.entry.options.get(CONF_MAX_TOKENS, DEFAULT_MAX_TOKENS)
+ 
+        headers = {"Content-Type": "application/json"}
+        payload = {
+            "model": model,
+            "messages": messages,
+            "temperature": temperature,
+            "top_p": top_p,
+            "max_tokens": max_tokens,
+            "stream": True,
+        }
+        if tools:
+            payload["tools"] = [self._tool_to_openai_tool(tool) for tool in tools]
+ 
+        if debug_logging:
+            _LOGGER.info("LocalAI Streaming Request: %s", json.dumps(payload, indent=2))
+ 
+        # State for reassembling tool calls from multiple deltas
+        tool_call_builders: dict[int, dict[str, Any]] = {}
+        first_delta_yielded = False
+ 
+        async with session.post(
+            f"{url}/v1/chat/completions", headers=headers, json=payload
+        ) as response:
+            response.raise_for_status()
+            async for line in response.content:
+                if not line.strip() or line.strip() == b"data: [DONE]":
+                    continue
+ 
+                line_str = line.decode('utf-8').replace("data: ", "")
+                try:
+                    response_json = json.loads(line_str)
+                    delta = response_json.get("choices", [{}])[0].get("delta", {})
+ 
+                    # The HA framework doesn't merge partial tool call deltas.
+                    # We must reassemble them here and yield them at the end.
+                    if raw_tool_calls := delta.pop("tool_calls", None):
+                        for raw_call in raw_tool_calls:
+                            index = raw_call.get("index", 0)
+                            if index not in tool_call_builders:
+                                tool_call_builders[index] = {"id": None, "type": "function", "function": {"name": None, "arguments": ""}}
+                            
+                            builder = tool_call_builders[index]
+                            if raw_call.get("id"):
+                                builder["id"] = raw_call["id"]
+                            if func := raw_call.get("function"):
+                                if func.get("name"):
+                                    builder["function"]["name"] = func["name"]
+                                if func.get("arguments"):
+                                    builder["function"]["arguments"] += func["arguments"]
+                    
+                    # Yield any other content (like text or the initial role)
+                    if delta:
+                        # To prevent chat_log from creating multiple messages,
+                        # only the first delta should contain the 'role'.
+                        if first_delta_yielded:
+                            delta.pop("role", None)
+                        
+                        if delta:
+                            yield delta
+                            if "role" in delta:
+                                first_delta_yielded = True
+ 
+                except (json.JSONDecodeError, KeyError):
+                    _LOGGER.debug("Skipping non-JSON line in stream: %s", line_str)
+ 
+            # After the stream, finalize and yield the reassembled tool calls
+            if tool_call_builders:
+                final_tool_inputs = []
+                for _index, builder in sorted(tool_call_builders.items()):
+                            try:
+                                tool_args = json.loads(builder["function"]["arguments"])
+                            except json.JSONDecodeError:
+                                _LOGGER.warning("Failed to parse tool arguments: %s", builder["function"]["arguments"])
+                                tool_args = {}
+                            
+                            final_tool_inputs.append(llm.ToolInput(
+                                id=builder["id"],
+                                tool_name=builder["function"]["name"],
+                                tool_args=tool_args,
+                            ))
+                
+                final_delta = {"tool_calls": final_tool_inputs}
+                # If no other delta was sent (e.g., a response with only tool calls),
+                # we need to add the role to this final delta.
+                if not first_delta_yielded:
+                    final_delta["role"] = "assistant"
+                
+                yield final_delta
+
     def _tool_to_openai_tool(self, tool: llm.Tool) -> dict[str, Any]:
         """Convert a tool to the OpenAI tool format."""
-        parameters: dict[str, Any]
-        if tool.parameters is None:
-            parameters = {}
-        # Some built-in tools use a generic object for empty parameters
-        # Some built-in tools use a generic object for empty parameters instead of a Schema.
-        # We check for this case to prevent noisy debug logs and handle it gracefully.
-        elif isinstance(tool.parameters, object) and not hasattr(tool.parameters, 'schema'):
-            _LOGGER.debug("Tool %s has generic object parameters, treating as empty.", tool.name)
-            parameters = {}
-        else:
-            try:
-                parameters = convert(
-                    tool.parameters, custom_serializer=llm.selector_serializer
-                )
-            except Exception as e:
-                _LOGGER.debug("Could not convert parameters for tool %s: %s", tool.name, e)
-                parameters = {}
+        # Manually convert voluptuous schema to JSON schema for OpenAI compatibility.
+        # The voluptuous_serialize.convert function does not produce the correct format.
+        parameters = {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        }
 
-        if not isinstance(parameters, dict):
-            _LOGGER.debug("Parameters for tool %s is not a dict: %s", tool.name, parameters)
-            parameters = {}
+        if isinstance(tool.parameters, vol.Schema):
+            for key, value in tool.parameters.schema.items():
+                prop_name = str(key.schema) if hasattr(key, 'schema') else str(key)
+                is_required = isinstance(key, vol.Required)
 
-        if "properties" not in parameters:
-            parameters["properties"] = {}
-        parameters.setdefault("type", "object")
+                if is_required:
+                    parameters["required"].append(prop_name)
+
+                # Basic type mapping from voluptuous to JSON schema
+                param_type = "string"  # Default to string
+                if value in (int, vol.Coerce(int)):
+                    param_type = "integer"
+                elif value in (float, vol.Coerce(float)):
+                    param_type = "number"
+                elif value == bool:
+                    param_type = "boolean"
+
+                param_info = {"type": param_type}
+                if hasattr(key, 'description') and key.description:
+                    param_info["description"] = key.description
+
+                parameters["properties"][prop_name] = param_info
+
+        # Clean up the schema for final output
+        if not parameters["properties"]:
+            parameters = {"type": "object", "properties": {}}
+        elif not parameters["required"]:
+            del parameters["required"]
 
         return {
             "type": "function",
